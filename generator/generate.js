@@ -6,7 +6,6 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// 神奈川県のエリアコード
 const WEATHER_AREA = '140000';
 
 async function fetchWeather() {
@@ -48,6 +47,40 @@ function getWeatherIcon(code) {
   return '🌤️';
 }
 
+// ===== 1. 天気のみ（大きく表示） =====
+function renderWeatherOnlyHTML(weather) {
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}年 ${today.getMonth()+1}月 ${today.getDate()}日 (${['日','月','火','水','木','金','土'][today.getDay()]})`;
+  const icon = getWeatherIcon(weather.today_code);
+  const temps = weather.temps.length >= 2 
+    ? `最低 ${weather.temps[0]}°  /  最高 ${weather.temps[1]}°`
+    : '';
+
+  return `
+    <!DOCTYPE html>
+    <html><head><meta charset="UTF-8"><style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { 
+        width: 800px; height: 480px; 
+        font-family: 'Noto Sans JP', sans-serif;
+        background: white; color: #222;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+      }
+      .date { font-size: 28px; color: #666; margin-bottom: 10px; }
+      .icon { font-size: 240px; line-height: 1; }
+      .weather { font-size: 48px; font-weight: 700; margin-top: 20px; }
+      .temps { font-size: 32px; color: #666; margin-top: 20px; }
+    </style></head><body>
+      <div class="date">${dateStr}</div>
+      <div class="icon">${icon}</div>
+      <div class="weather">${weather.today_weather}</div>
+      <div class="temps">${temps}</div>
+    </body></html>
+  `;
+}
+
+// ===== 2. 天気＋日にち =====
 function renderWeatherCalendarHTML(weather, events, settings) {
   const today = new Date();
   const ymd = today.toISOString().split('T')[0];
@@ -118,10 +151,6 @@ function renderWeatherCalendarHTML(weather, events, settings) {
         font-size: 14px; color: #999; margin-left: auto;
       }
       .no-event { color: #ccc; font-size: 18px; padding: 20px 0; }
-      .updated { 
-        position: absolute; bottom: 8px; right: 12px; 
-        font-size: 10px; color: #bbb;
-      }
     </style></head><body>
       <div class="left">
         <div class="weather-icon">${icon}</div>
@@ -152,11 +181,11 @@ function renderWeatherCalendarHTML(weather, events, settings) {
         <div class="events-title">今日の予定</div>
         <div class="events">${eventsHtml}</div>
       </div>
-      <div class="updated">更新: ${weather.updated}</div>
     </body></html>
   `;
 }
 
+// ===== 3. 月カレンダー =====
 function renderMonthCalendarHTML(events, settings) {
   const today = new Date();
   const year = today.getFullYear();
@@ -178,15 +207,22 @@ function renderMonthCalendarHTML(events, settings) {
   for (let d = 1; d <= daysInMonth; d++) {
     const isToday = d === today.getDate();
     const dayEvents = eventsByDate[d] || [];
-    const dots = dayEvents.map(e => {
-      const c = e.person === settings.person1_name ? settings.person1_color :
-                e.person === settings.person2_name ? settings.person2_color : '#999';
-      return `<span class="dot" style="background:${c}"></span>`;
+    
+    // 予定のテキスト表示（最大2件、10文字で切る）
+    const eventsText = dayEvents.slice(0, 2).map(e => {
+      const color = e.person === settings.person1_name ? settings.person1_color :
+                    e.person === settings.person2_name ? settings.person2_color : '#999';
+      const shortTitle = e.title.length > 10 ? e.title.substring(0, 10) + '…' : e.title;
+      return `<div class="event-text" style="color:${color}">${shortTitle}</div>`;
     }).join('');
+    
+    const moreCount = dayEvents.length > 2 ? `<div class="more">+${dayEvents.length - 2}</div>` : '';
+    
     cells += `
       <div class="cell ${isToday ? 'today' : ''}">
         <div class="day">${d}</div>
-        <div class="dots">${dots}</div>
+        ${eventsText}
+        ${moreCount}
       </div>`;
   }
   
@@ -197,34 +233,37 @@ function renderMonthCalendarHTML(events, settings) {
       body { 
         width: 800px; height: 480px; 
         font-family: 'Noto Sans JP', sans-serif;
-        padding: 20px 30px; background: white;
+        padding: 16px 24px; background: white;
       }
-      .header { display: flex; align-items: baseline; margin-bottom: 10px; }
-      .month { font-size: 56px; font-weight: 900; color: #4A90E2; }
-      .year { font-size: 22px; color: #999; margin-left: 12px; }
-      .legend { margin-left: auto; font-size: 14px; color: #666; }
-      .legend-item { display: inline-flex; align-items: center; margin-left: 16px; }
+      .header { display: flex; align-items: baseline; margin-bottom: 6px; }
+      .month { font-size: 48px; font-weight: 900; color: #4A90E2; }
+      .year { font-size: 20px; color: #999; margin-left: 12px; }
+      .legend { margin-left: auto; font-size: 13px; color: #666; }
+      .legend-item { display: inline-flex; align-items: center; margin-left: 12px; }
       .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
       .weekdays, .grid { display: grid; grid-template-columns: repeat(7, 1fr); }
-      .weekdays { font-size: 14px; color: #999; text-align: center; padding: 6px 0; border-bottom: 1px solid #eee; }
+      .weekdays { font-size: 13px; color: #999; text-align: center; padding: 4px 0; border-bottom: 1px solid #eee; }
       .weekdays div:first-child { color: #E24A8B; }
       .weekdays div:last-child { color: #4A90E2; }
       .cell { 
         border-right: 1px solid #f5f5f5; border-bottom: 1px solid #f5f5f5;
-        padding: 6px; height: 62px; position: relative;
+        padding: 4px 6px; height: 62px; position: relative;
+        overflow: hidden;
       }
       .cell.empty { background: #fafafa; }
-      .day { font-size: 18px; font-weight: 600; }
+      .day { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
       .cell.today .day { 
         background: #E24A8B; color: white; 
-        width: 28px; height: 28px; border-radius: 50%;
+        width: 22px; height: 22px; border-radius: 50%;
         display: flex; align-items: center; justify-content: center;
+        font-size: 12px;
       }
-      .dots { margin-top: 4px; }
-      .dot { 
-        display: inline-block; width: 8px; height: 8px; 
-        border-radius: 50%; margin-right: 3px;
+      .event-text {
+        font-size: 10px; line-height: 1.3;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        font-weight: 500;
       }
+      .more { font-size: 9px; color: #bbb; margin-top: 1px; }
     </style></head><body>
       <div class="header">
         <div class="month">${month + 1}</div>
@@ -240,10 +279,11 @@ function renderMonthCalendarHTML(events, settings) {
   `;
 }
 
+// ===== 4. 写真 =====
 function renderPhotoHTML(imageUrl) {
   if (!imageUrl) {
     return `
-      <!DOCTYPE html><html><body style="width:800px;height:480px;margin:0;display:flex;align-items:center;justify-content:center;font-family:sans-serif;font-size:24px;color:#999;">
+      <!DOCTYPE html><html><body style="width:800px;height:480px;margin:0;display:flex;align-items:center;justify-content:center;font-family:'Noto Sans JP',sans-serif;font-size:24px;color:#999;">
       画像が選択されていません
       </body></html>`;
   }
@@ -259,22 +299,36 @@ async function main() {
   const weather = await fetchWeather();
   
   const { settings, events } = gasData;
-  const mode = settings.mode || 'weather_calendar';
-  const hour = new Date().toLocaleString('ja-JP', { 
-    timeZone: 'Asia/Tokyo', hour: 'numeric', hour12: false
-  });
+  let mode = settings.mode || 'auto';
   
-  let html;
-  if (mode === 'photo') {
-    html = renderPhotoHTML(gasData.imageUrl);
-  } else {
-    if (parseInt(hour) < 12) {
-      html = renderWeatherCalendarHTML(weather, events, settings);
-    } else {
-      html = renderMonthCalendarHTML(events, settings);
-    }
+  // "auto" モードの時だけ、時刻で自動切替
+  if (mode === 'auto') {
+    const hour = new Date().toLocaleString('ja-JP', { 
+      timeZone: 'Asia/Tokyo', hour: 'numeric', hour12: false
+    });
+    mode = parseInt(hour) < 12 ? 'weather_calendar' : 'month_calendar';
+    console.log(`Auto mode → ${mode} (hour: ${hour})`);
   }
   
+  let html;
+  switch (mode) {
+    case 'weather_only':
+      html = renderWeatherOnlyHTML(weather);
+      break;
+    case 'weather_calendar':
+      html = renderWeatherCalendarHTML(weather, events, settings);
+      break;
+    case 'month_calendar':
+      html = renderMonthCalendarHTML(events, settings);
+      break;
+    case 'photo':
+      html = renderPhotoHTML(gasData.imageUrl);
+      break;
+    default:
+      html = renderWeatherCalendarHTML(weather, events, settings);
+  }
+  
+  console.log(`Mode: ${mode}`);
   console.log('Launching Puppeteer...');
   const browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -293,7 +347,7 @@ async function main() {
   });
   
   await browser.close();
-  console.log('Done! Image saved to output/display.png');
+  console.log('Done!');
 }
 
 main().catch(err => {
