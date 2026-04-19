@@ -6,30 +6,63 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const WEATHER_AREA = '140000';
+// 地域コード: 140000=神奈川, 130000=東京, 270000=大阪 など
+const WEATHER_AREA = '2038500';
 
+// ===== 気象庁から天気・気温・降水確率を取得 =====
 async function fetchWeather() {
   const url = `https://www.jma.go.jp/bosai/forecast/data/forecast/${WEATHER_AREA}.json`;
   const res = await fetch(url);
   const data = await res.json();
   
-  const today = data[0].timeSeries[0].areas[0].weathers[0];
-  const todayCode = data[0].timeSeries[0].areas[0].weatherCodes[0];
-  
-  let temps = [];
-  try {
-    const tempSeries = data[1].timeSeries.find(t => t.areas[0].temps);
-    if (tempSeries) {
-      temps = tempSeries.areas[0].temps.map(Number);
-    }
-  } catch (e) {}
-  
-  return {
-    today_weather: today,
-    today_code: todayCode,
-    temps: temps,
+  const result = {
+    today_weather: '',
+    today_code: '100',
+    tempMin: null,
+    tempMax: null,
+    pops: [],       // 降水確率 6時間ごと
+    popTimes: [],   // 降水確率の時間ラベル
     updated: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })
   };
+  
+  try {
+    // 今日の天気
+    result.today_weather = data[0].timeSeries[0].areas[0].weathers[0];
+    result.today_code = data[0].timeSeries[0].areas[0].weatherCodes[0];
+    
+    // 降水確率（6時間ごと）
+    const popSeries = data[0].timeSeries[1];
+    if (popSeries) {
+      result.pops = popSeries.areas[0].pops.slice(0, 4);
+      result.popTimes = popSeries.timeDefines.slice(0, 4);
+    }
+    
+    // 気温（最低・最高）- data[1]は週間予報
+    const weeklyTemp = data[1]?.timeSeries?.find(t => t.areas[0].tempsMin || t.areas[0].temps);
+    if (weeklyTemp) {
+      const temps = weeklyTemp.areas[0].temps;
+      if (temps && temps.length >= 2) {
+        result.tempMin = Number(temps[0]);
+        result.tempMax = Number(temps[1]);
+      }
+    }
+    
+    // data[0]のtemp系列も試す
+    const dailyTempMin = data[0].timeSeries.find(t => t.areas[0].tempsMin);
+    if (dailyTempMin) {
+      const v = Number(dailyTempMin.areas[0].tempsMin[0]);
+      if (!isNaN(v)) result.tempMin = v;
+    }
+    const dailyTempMax = data[0].timeSeries.find(t => t.areas[0].tempsMax);
+    if (dailyTempMax) {
+      const v = Number(dailyTempMax.areas[0].tempsMax[0]);
+      if (!isNaN(v)) result.tempMax = v;
+    }
+  } catch (e) {
+    console.error('Weather parse error:', e);
+  }
+  
+  return result;
 }
 
 async function fetchGasData() {
@@ -47,14 +80,31 @@ function getWeatherIcon(code) {
   return '🌤️';
 }
 
-// ===== 1. 天気のみ（大きく表示） =====
+// 時刻ラベルを "6時" のような形式に
+function formatHour(isoString) {
+  const d = new Date(isoString);
+  const h = d.getHours();
+  return `${h}時`;
+}
+
+// ===== 1. 天気のみ =====
 function renderWeatherOnlyHTML(weather) {
   const today = new Date();
   const dateStr = `${today.getFullYear()}年 ${today.getMonth()+1}月 ${today.getDate()}日 (${['日','月','火','水','木','金','土'][today.getDay()]})`;
   const icon = getWeatherIcon(weather.today_code);
-  const temps = weather.temps.length >= 2 
-    ? `最低 ${weather.temps[0]}°  /  最高 ${weather.temps[1]}°`
+  
+  const tempStr = (weather.tempMax !== null || weather.tempMin !== null) 
+    ? `最低 ${weather.tempMin ?? '-'}° &nbsp;/&nbsp; 最高 ${weather.tempMax ?? '-'}°`
     : '';
+  
+  // 降水確率の棒グラフ
+  const popBars = weather.pops.map((p, i) => `
+    <div class="pop-item">
+      <div class="pop-time">${formatHour(weather.popTimes[i])}</div>
+      <div class="pop-bar-wrap"><div class="pop-bar" style="height:${p || 0}%"></div></div>
+      <div class="pop-value">${p ?? '-'}%</div>
+    </div>
+  `).join('');
 
   return `
     <!DOCTYPE html>
@@ -65,17 +115,43 @@ function renderWeatherOnlyHTML(weather) {
         font-family: 'Noto Sans JP', sans-serif;
         background: white; color: #222;
         display: flex; flex-direction: column;
-        align-items: center; justify-content: center;
+        align-items: center; padding: 20px;
       }
-      .date { font-size: 28px; color: #666; margin-bottom: 10px; }
-      .icon { font-size: 240px; line-height: 1; }
-      .weather { font-size: 48px; font-weight: 700; margin-top: 20px; }
-      .temps { font-size: 32px; color: #666; margin-top: 20px; }
+      .date { font-size: 24px; color: #666; }
+      .main { display: flex; align-items: center; margin-top: 10px; gap: 30px; }
+      .icon { font-size: 180px; line-height: 1; }
+      .info { display: flex; flex-direction: column; }
+      .weather { font-size: 44px; font-weight: 700; }
+      .temps { font-size: 28px; color: #666; margin-top: 10px; }
+      .pop-section { 
+        display: flex; gap: 24px; margin-top: 24px;
+        padding: 16px 32px; border-top: 1px solid #eee; width: 100%;
+        justify-content: center; align-items: flex-end;
+      }
+      .pop-item { text-align: center; }
+      .pop-time { font-size: 14px; color: #999; }
+      .pop-bar-wrap {
+        width: 40px; height: 50px; background: #f0f0f0;
+        border-radius: 6px; position: relative; margin: 4px auto;
+        display: flex; align-items: flex-end;
+      }
+      .pop-bar { 
+        width: 100%; background: #4A90E2; 
+        border-radius: 6px; min-height: 2px;
+      }
+      .pop-value { font-size: 14px; font-weight: 600; color: #4A90E2; }
     </style></head><body>
       <div class="date">${dateStr}</div>
-      <div class="icon">${icon}</div>
-      <div class="weather">${weather.today_weather}</div>
-      <div class="temps">${temps}</div>
+      <div class="main">
+        <div class="icon">${icon}</div>
+        <div class="info">
+          <div class="weather">${weather.today_weather}</div>
+          <div class="temps">${tempStr}</div>
+        </div>
+      </div>
+      <div class="pop-section">
+        ${popBars || '<div style="color:#ccc">降水確率情報なし</div>'}
+      </div>
     </body></html>
   `;
 }
@@ -95,9 +171,20 @@ function renderWeatherCalendarHTML(weather, events, settings) {
     : '<div class="no-event">今日の予定はありません</div>';
   
   const icon = getWeatherIcon(weather.today_code);
-  const temps = weather.temps.length >= 2 
-    ? `${weather.temps[0]}° / ${weather.temps[1]}°`
+  const tempStr = (weather.tempMax !== null || weather.tempMin !== null) 
+    ? `${weather.tempMin ?? '-'}° / ${weather.tempMax ?? '-'}°`
     : '';
+  
+  // 降水確率を時間別気温の代わりに表示
+  const pops = weather.pops.slice(0, 3);
+  const popTimes = weather.popTimes.slice(0, 3);
+  const hourlyBlocks = pops.map((p, i) => `
+    <div class="hourly-item">
+      <div class="hourly-time">${formatHour(popTimes[i])}</div>
+      <div class="hourly-icon">💧</div>
+      <div class="hourly-temp">${p ?? '-'}%</div>
+    </div>
+  `).join('') || '<div style="color:#ccc">降水情報なし</div>';
 
   return `
     <!DOCTYPE html>
@@ -114,17 +201,20 @@ function renderWeatherCalendarHTML(weather, events, settings) {
         border-right: 2px solid #eee;
         display: flex; flex-direction: column;
       }
-      .weather-icon { font-size: 140px; text-align: center; line-height: 1; }
-      .weather-text { font-size: 32px; text-align: center; margin-top: 12px; font-weight: 600; }
-      .temps { font-size: 28px; text-align: center; color: #666; margin-top: 8px; }
+      .weather-icon { font-size: 120px; text-align: center; line-height: 1; }
+      .weather-text { font-size: 30px; text-align: center; margin-top: 8px; font-weight: 600; }
+      .temps { font-size: 26px; text-align: center; color: #666; margin-top: 6px; }
+      .hourly-label { 
+        font-size: 13px; color: #999; text-align: center; 
+        margin-top: 20px; border-top: 1px solid #eee; padding-top: 14px;
+      }
       .hourly { 
-        display: flex; justify-content: space-around; margin-top: 30px;
-        border-top: 1px solid #eee; padding-top: 20px;
+        display: flex; justify-content: space-around; margin-top: 8px;
       }
       .hourly-item { text-align: center; }
-      .hourly-time { font-size: 18px; color: #666; }
-      .hourly-icon { font-size: 40px; margin: 4px 0; }
-      .hourly-temp { font-size: 20px; font-weight: 600; }
+      .hourly-time { font-size: 16px; color: #666; }
+      .hourly-icon { font-size: 32px; margin: 4px 0; }
+      .hourly-temp { font-size: 20px; font-weight: 600; color: #4A90E2; }
       
       .right { width: 400px; padding: 30px; display: flex; flex-direction: column; }
       .date-big { 
@@ -155,24 +245,9 @@ function renderWeatherCalendarHTML(weather, events, settings) {
       <div class="left">
         <div class="weather-icon">${icon}</div>
         <div class="weather-text">${weather.today_weather}</div>
-        <div class="temps">${temps}</div>
-        <div class="hourly">
-          <div class="hourly-item">
-            <div class="hourly-time">9時</div>
-            <div class="hourly-icon">${icon}</div>
-            <div class="hourly-temp">${weather.temps[0] || '-'}°</div>
-          </div>
-          <div class="hourly-item">
-            <div class="hourly-time">12時</div>
-            <div class="hourly-icon">${icon}</div>
-            <div class="hourly-temp">${weather.temps[1] || '-'}°</div>
-          </div>
-          <div class="hourly-item">
-            <div class="hourly-time">16時</div>
-            <div class="hourly-icon">${icon}</div>
-            <div class="hourly-temp">${weather.temps[1] || '-'}°</div>
-          </div>
-        </div>
+        <div class="temps">${tempStr}</div>
+        <div class="hourly-label">降水確率</div>
+        <div class="hourly">${hourlyBlocks}</div>
       </div>
       <div class="right">
         <div class="date-big">${today.getDate()}</div>
@@ -208,7 +283,6 @@ function renderMonthCalendarHTML(events, settings) {
     const isToday = d === today.getDate();
     const dayEvents = eventsByDate[d] || [];
     
-    // 予定のテキスト表示（最大2件、10文字で切る）
     const eventsText = dayEvents.slice(0, 2).map(e => {
       const color = e.person === settings.person1_name ? settings.person1_color :
                     e.person === settings.person2_name ? settings.person2_color : '#999';
@@ -288,47 +362,60 @@ function renderPhotoHTML(imageUrl) {
       </body></html>`;
   }
   return `
-    <!DOCTYPE html><html><body style="width:800px;height:480px;margin:0;background:black;display:flex;align-items:center;justify-content:center;">
-    <img src="${imageUrl}" style="max-width:100%;max-height:100%;object-fit:contain;">
+    <!DOCTYPE html><html><head><style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { 
+        width: 800px; height: 480px; background: #000;
+        display: flex; align-items: center; justify-content: center;
+        overflow: hidden;
+      }
+      img { max-width: 800px; max-height: 480px; object-fit: contain; }
+    </style></head><body>
+      <img src="${imageUrl}" alt="">
     </body></html>`;
 }
 
 async function main() {
   console.log('Fetching data...');
   const gasData = await fetchGasData();
+  
+  if (gasData.error) {
+    console.error('GAS error:', gasData.error);
+    process.exit(1);
+  }
+  
   const weather = await fetchWeather();
+  console.log('Weather:', JSON.stringify(weather));
   
   const { settings, events } = gasData;
+  console.log(`Image URL exists: ${gasData.imageUrl ? 'YES (' + gasData.imageUrl.length + ' chars)' : 'NO'}`);
+  
   let mode = settings.mode || 'auto';
   
-  // "auto" モードの時だけ、時刻で自動切替
   if (mode === 'auto') {
     const hour = new Date().toLocaleString('ja-JP', { 
       timeZone: 'Asia/Tokyo', hour: 'numeric', hour12: false
     });
     mode = parseInt(hour) < 12 ? 'weather_calendar' : 'month_calendar';
-    console.log(`Auto mode → ${mode} (hour: ${hour})`);
+    console.log(`Auto mode → ${mode}`);
   }
+  
+  console.log(`Mode: ${mode}`);
   
   let html;
   switch (mode) {
     case 'weather_only':
-      html = renderWeatherOnlyHTML(weather);
-      break;
+      html = renderWeatherOnlyHTML(weather); break;
     case 'weather_calendar':
-      html = renderWeatherCalendarHTML(weather, events, settings);
-      break;
+      html = renderWeatherCalendarHTML(weather, events, settings); break;
     case 'month_calendar':
-      html = renderMonthCalendarHTML(events, settings);
-      break;
+      html = renderMonthCalendarHTML(events, settings); break;
     case 'photo':
-      html = renderPhotoHTML(gasData.imageUrl);
-      break;
+      html = renderPhotoHTML(gasData.imageUrl); break;
     default:
       html = renderWeatherCalendarHTML(weather, events, settings);
   }
   
-  console.log(`Mode: ${mode}`);
   console.log('Launching Puppeteer...');
   const browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox']
