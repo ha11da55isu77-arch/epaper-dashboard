@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 地域コード: 140000=神奈川, 130000=東京, 270000=大阪 など
-const WEATHER_AREA = '2038500';
+const WEATHER_AREA = '140000';
 
 // ===== 気象庁から天気・気温・降水確率を取得 =====
 async function fetchWeather() {
