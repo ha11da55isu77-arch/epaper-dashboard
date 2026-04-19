@@ -1,0 +1,37 @@
+name: Generate e-Paper Image
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        working-directory: ./generator
+        run: npm install
+      
+      - name: Generate image
+        working-directory: ./generator
+        env:
+          GAS_URL: ${{ secrets.GAS_URL }}
+        run: node generate.js
+      
+      - name: Commit output
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add output/display.png
+          git diff --staged --quiet || git commit -m "Update display [skip ci]"
+          git push
