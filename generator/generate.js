@@ -80,7 +80,23 @@ function getWeatherIcon(code) {
   if (c.startsWith('4')) return '❄️';
   return '🌤️';
 }
-
+// 天気の文字列から、時間変化を解析して複数のアイコンを返す
+function parseWeatherIcons(weatherText) {
+  const icons = [];
+  // "晴れのちくもり", "晴れ時々雨", "くもり一時雨" などを分割
+  const parts = weatherText.split(/のち|時々|一時/);
+  for (const p of parts) {
+    const trimmed = p.trim();
+    if (!trimmed) continue;
+    if (trimmed.includes('雪')) icons.push('❄️');
+    else if (trimmed.includes('雨')) icons.push('🌧️');
+    else if (trimmed.includes('くもり') || trimmed.includes('曇')) icons.push('☁️');
+    else if (trimmed.includes('晴')) icons.push('☀️');
+    else icons.push('🌤️');
+  }
+  if (icons.length === 0) icons.push('🌤️');
+  return icons.slice(0, 3); // 最大3つ
+}
 // 時刻ラベルを "6時" のような形式に
 function formatHour(isoString) {
   const d = new Date(isoString);
@@ -171,21 +187,38 @@ function renderWeatherCalendarHTML(weather, events, settings) {
       }).join('')
     : '<div class="no-event">今日の予定はありません</div>';
   
-  const icon = getWeatherIcon(weather.today_code);
-  const tempStr = (weather.tempMax !== null || weather.tempMin !== null) 
-    ? `${weather.tempMin ?? '-'}° / ${weather.tempMax ?? '-'}°`
-    : '';
+function renderWeatherCalendarHTML(weather, events, settings) {
+  const today = new Date();
+  const ymd = today.toISOString().split('T')[0];
   
-  // 降水確率を時間別気温の代わりに表示
-  const pops = weather.pops.slice(0, 3);
-  const popTimes = weather.popTimes.slice(0, 3);
-  const hourlyBlocks = pops.map((p, i) => `
-    <div class="hourly-item">
-      <div class="hourly-time">${formatHour(popTimes[i])}</div>
-      <div class="hourly-icon">💧</div>
-      <div class="hourly-temp">${p ?? '-'}%</div>
-    </div>
-  `).join('') || '<div style="color:#ccc">降水情報なし</div>';
+  const todayEvents = events.filter(e => e.date === ymd);
+  const eventsHtml = todayEvents.length 
+    ? todayEvents.map(e => {
+        const color = e.person === settings.person1_name ? settings.person1_color :
+                      e.person === settings.person2_name ? settings.person2_color : '#999';
+        return `<div class="event"><span class="dot" style="background:${color}"></span>${e.title}<span class="person">${e.person}</span></div>`;
+      }).join('')
+    : '<div class="no-event">今日の予定はありません</div>';
+  
+  // 天気アイコン（複数対応）
+  const icons = parseWeatherIcons(weather.today_weather);
+  const iconsHtml = icons.map((icon, i) => {
+    const arrow = i < icons.length - 1 ? '<span class="arrow">→</span>' : '';
+    return `<span class="icon">${icon}</span>${arrow}`;
+  }).join('');
+  
+  // 時間帯別降水確率テーブル
+  // 気象庁APIは6時間刻み: 00-06, 06-12, 12-18, 18-24
+  const popLabels = ['0-6', '6-12', '12-18', '18-24'];
+  const pops = weather.pops.length >= 4 ? weather.pops.slice(0, 4) : [null, null, null, null];
+  
+  const popCells = popLabels.map((label, i) => 
+    `<div class="pop-cell"><div class="pop-label">${label}</div><div class="pop-val">${pops[i] ?? '-'}%</div></div>`
+  ).join('');
+  
+  // 曜日
+  const weekdayName = ['日','月','火','水','木','金','土'][today.getDay()];
+  const headerText = `今日 ${today.getDate()}日(${weekdayName})`;
 
   return `
     <!DOCTYPE html>
@@ -198,26 +231,52 @@ function renderWeatherCalendarHTML(weather, events, settings) {
         display: flex;
       }
       .left {
-        width: 400px; padding: 30px;
+        width: 420px; padding: 16px 20px;
         border-right: 2px solid #eee;
         display: flex; flex-direction: column;
       }
-      .weather-icon { font-size: 120px; text-align: center; line-height: 1; }
-      .weather-text { font-size: 30px; text-align: center; margin-top: 8px; font-weight: 600; }
-      .temps { font-size: 26px; text-align: center; color: #666; margin-top: 6px; }
-      .hourly-label { 
-        font-size: 13px; color: #999; text-align: center; 
-        margin-top: 20px; border-top: 1px solid #eee; padding-top: 14px;
+      .header-bar {
+        background: #4A90E2; color: white;
+        padding: 8px 14px; border-radius: 6px;
+        font-size: 20px; font-weight: 700;
+        text-align: center;
       }
-      .hourly { 
-        display: flex; justify-content: space-around; margin-top: 8px;
+      .icons-row {
+        display: flex; align-items: center; justify-content: center;
+        margin: 12px 0; gap: 8px;
       }
-      .hourly-item { text-align: center; }
-      .hourly-time { font-size: 16px; color: #666; }
-      .hourly-icon { font-size: 32px; margin: 4px 0; }
-      .hourly-temp { font-size: 20px; font-weight: 600; color: #4A90E2; }
+      .icon { font-size: 80px; line-height: 1; }
+      .arrow { font-size: 36px; color: #F5A623; font-weight: bold; }
+      .weather-text { 
+        font-size: 26px; text-align: center; font-weight: 600;
+        border-top: 1px solid #ddd; border-bottom: 1px solid #ddd;
+        padding: 8px 0;
+      }
+      .pop-table {
+        display: grid; grid-template-columns: repeat(4, 1fr);
+        margin-top: 10px;
+      }
+      .pop-cell {
+        text-align: center; padding: 6px 4px;
+        border-right: 1px solid #eee;
+      }
+      .pop-cell:last-child { border-right: none; }
+      .pop-label { font-size: 14px; color: #666; }
+      .pop-val { font-size: 22px; font-weight: 700; color: #4A90E2; margin-top: 2px; }
+      .temp-row {
+        display: grid; grid-template-columns: 1fr 1fr;
+        border-top: 2px solid #ddd; margin-top: 8px; padding-top: 8px;
+      }
+      .temp-cell { text-align: center; }
+      .temp-label { font-size: 14px; color: #666; }
+      .temp-val { font-size: 36px; font-weight: 700; margin-top: 2px; }
+      .temp-cell.min .temp-val { color: #4A90E2; }
+      .temp-cell.max .temp-val { color: #E24A4A; }
       
-      .right { width: 400px; padding: 30px; display: flex; flex-direction: column; }
+      .right { 
+        width: 380px; padding: 30px; 
+        display: flex; flex-direction: column; 
+      }
       .date-big { 
         font-size: 120px; font-weight: 900; line-height: 1;
         color: #E24A8B;
@@ -225,12 +284,12 @@ function renderWeatherCalendarHTML(weather, events, settings) {
       .date-sub { font-size: 22px; color: #666; margin-top: 8px; }
       .weekday { font-size: 28px; color: #4A90E2; margin-top: 8px; font-weight: 600; }
       .events-title { 
-        font-size: 18px; color: #999; margin-top: 30px; 
+        font-size: 18px; color: #999; margin-top: 26px; 
         border-bottom: 2px solid #eee; padding-bottom: 6px;
       }
-      .events { margin-top: 12px; }
+      .events { margin-top: 10px; }
       .event { 
-        font-size: 20px; padding: 10px 0;
+        font-size: 18px; padding: 8px 0;
         display: flex; align-items: center;
         border-bottom: 1px solid #f5f5f5;
       }
@@ -239,21 +298,30 @@ function renderWeatherCalendarHTML(weather, events, settings) {
         border-radius: 50%; margin-right: 12px;
       }
       .person { 
-        font-size: 14px; color: #999; margin-left: auto;
+        font-size: 13px; color: #999; margin-left: auto;
       }
-      .no-event { color: #ccc; font-size: 18px; padding: 20px 0; }
+      .no-event { color: #ccc; font-size: 16px; padding: 16px 0; }
     </style></head><body>
       <div class="left">
-        <div class="weather-icon">${icon}</div>
+        <div class="header-bar">${headerText}</div>
+        <div class="icons-row">${iconsHtml}</div>
         <div class="weather-text">${weather.today_weather}</div>
-        <div class="temps">${tempStr}</div>
-        <div class="hourly-label">降水確率</div>
-        <div class="hourly">${hourlyBlocks}</div>
+        <div class="pop-table">${popCells}</div>
+        <div class="temp-row">
+          <div class="temp-cell min">
+            <div class="temp-label">朝の最低</div>
+            <div class="temp-val">${weather.tempMin ?? '-'}°</div>
+          </div>
+          <div class="temp-cell max">
+            <div class="temp-label">日中の最高</div>
+            <div class="temp-val">${weather.tempMax ?? '-'}°</div>
+          </div>
+        </div>
       </div>
       <div class="right">
         <div class="date-big">${today.getDate()}</div>
         <div class="date-sub">${today.getFullYear()}年 ${today.getMonth() + 1}月</div>
-        <div class="weekday">${['日','月','火','水','木','金','土'][today.getDay()]}曜日</div>
+        <div class="weekday">${weekdayName}曜日</div>
         <div class="events-title">今日の予定</div>
         <div class="events">${eventsHtml}</div>
       </div>
