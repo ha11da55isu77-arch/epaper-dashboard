@@ -7,9 +7,9 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 地域コード
-const WEATHER_AREA = '200000';     // 長野県
-const AREA_NAME = '南部';          // 北部/中部/南部
-const TEMP_STATION = '飯田';       // 気温観測地点
+const WEATHER_AREA = '200000';
+const AREA_NAME = '南部';
+const TEMP_STATION = '飯田';
 
 // ===== 気象庁から天気取得 =====
 async function fetchWeather() {
@@ -41,7 +41,6 @@ async function fetchWeather() {
     const jstNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
     const currentHour = jstNow.getHours();
     
-    // 17時以降は「明日」の予報
     const useTomorrow = currentHour >= 17;
     result.target_label = useTomorrow ? '明日' : '今日';
     
@@ -60,7 +59,7 @@ async function fetchWeather() {
     result.today_weather = weatherArea.weathers[weatherIdx];
     result.today_code = weatherArea.weatherCodes[weatherIdx];
     
-    // 降水確率: 対象日のpopsだけを抽出（JST基準で日付比較）
+    // 降水確率: 対象日のpopsだけを抽出
     const popSeries = data[0].timeSeries[1];
     if (popSeries) {
       const popArea = findArea(popSeries.areas);
@@ -69,7 +68,6 @@ async function fetchWeather() {
       const pops = [];
       const popTimes = [];
       for (let i = 0; i < popSeries.timeDefines.length; i++) {
-        // "2026-04-21T06:00:00+09:00" → 文字列の最初10文字が日付
         const ymd = popSeries.timeDefines[i].substring(0, 10);
         if (ymd === targetYmd) {
           pops.push(popArea.pops[i]);
@@ -81,34 +79,50 @@ async function fetchWeather() {
       console.log(`Target YMD: ${targetYmd}, Found ${pops.length} pops:`, pops);
     }
     
-    // 気温: "temps":["13","23"] 形式から [最低, 最高] を取得
-    // 気温: "temps":["13","23"] 形式から [最低, 最高] を取得
-    const tempSeries = data[0].timeSeries.find(t => t.areas[0].temps);
-    if (tempSeries) {
-      const tempArea = tempSeries.areas.find(a => a.area.name.includes(TEMP_STATION)) || tempSeries.areas[0];
-      if (tempArea.temps && tempArea.temps.length >= 2) {
-        const vMin = Number(tempArea.temps[0]);
-        const vMax = Number(tempArea.temps[1]);
-        if (!isNaN(vMin)) result.tempMin = vMin;
-        if (!isNaN(vMax)) result.tempMax = vMax;
-        console.log(`Temp station: ${tempArea.area.name}, temps:`, tempArea.temps);
+    // ===== 気温取得（週間予報は使わない） =====
+    const targetYmdForTemp = `${targetDate.getFullYear()}-${String(targetDate.getMonth()+1).padStart(2,'0')}-${String(targetDate.getDate()).padStart(2,'0')}`;
+    
+    const tempSeriesAll = data[0].timeSeries.filter(t => t.areas[0].temps);
+    let tempFound = false;
+    
+    for (const ts of tempSeriesAll) {
+      const tempArea = ts.areas.find(a => a.area.name.includes(TEMP_STATION)) || ts.areas[0];
+      if (!tempArea.temps) continue;
+      
+      const matchIndices = [];
+      for (let i = 0; i < ts.timeDefines.length; i++) {
+        if (ts.timeDefines[i].substring(0, 10) === targetYmdForTemp) {
+          matchIndices.push(i);
+        }
+      }
+      
+      if (matchIndices.length >= 2) {
+        const v1 = Number(tempArea.temps[matchIndices[0]]);
+        const v2 = Number(tempArea.temps[matchIndices[1]]);
+        if (!isNaN(v1) && !isNaN(v2)) {
+          result.tempMin = Math.min(v1, v2);
+          result.tempMax = Math.max(v1, v2);
+          tempFound = true;
+          console.log(`Temp (station: ${tempArea.area.name}) matched day [min, max] = [${result.tempMin}, ${result.tempMax}]`);
+          break;
+        }
       }
     }
     
-    // 明日の気温は週間予報から取得
-    if (useTomorrow) {
-      const weekly = data[1]?.timeSeries?.find(t => t.areas[0].tempsMin || t.areas[0].tempsMax);
-      if (weekly) {
-        const wa = weekly.areas[0];
-        if (wa.tempsMin && wa.tempsMin.length > 1) {
-          const v = Number(wa.tempsMin[1]);
-          if (!isNaN(v)) result.tempMin = v;
+    // フォールバック: 対象日が見つからなければ data[0] の先頭 temps を使う
+    if (!tempFound) {
+      const tempSeries = data[0].timeSeries.find(t => t.areas[0].temps);
+      if (tempSeries) {
+        const tempArea = tempSeries.areas.find(a => a.area.name.includes(TEMP_STATION)) || tempSeries.areas[0];
+        if (tempArea.temps && tempArea.temps.length >= 2) {
+          const v1 = Number(tempArea.temps[0]);
+          const v2 = Number(tempArea.temps[1]);
+          if (!isNaN(v1) && !isNaN(v2)) {
+            result.tempMin = Math.min(v1, v2);
+            result.tempMax = Math.max(v1, v2);
+            console.log(`Temp fallback (station: ${tempArea.area.name}): [${result.tempMin}, ${result.tempMax}]`);
+          }
         }
-        if (wa.tempsMax && wa.tempsMax.length > 1) {
-          const v = Number(wa.tempsMax[1]);
-          if (!isNaN(v)) result.tempMax = v;
-        }
-        console.log(`Weekly temp - Min: ${result.tempMin}, Max: ${result.tempMax}`);
       }
     }
     
@@ -192,18 +206,16 @@ function renderWeatherOnlyHTML(weather) {
   `;
 }
 
-// ===== 2. 天気＋日にち =====
+// ===== 2. 天気＋日にち（右側に今日と明日の予定） =====
 function renderWeatherCalendarHTML(weather, events, settings) {
   const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
   
-  // 天気の対象日（17時以降は明日）
   const targetDate = weather.target_date ? new Date(weather.target_date) : today;
   const targetWeekday = ['日','月','火','水','木','金','土'][targetDate.getDay()];
   const headerText = `${weather.target_label || '今日'} ${targetDate.getDate()}日(${targetWeekday})`;
   
-  // 予定を日付文字列でフィルタ
   const formatYmd = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const todayYmd = formatYmd(today);
   const tomorrowYmd = formatYmd(tomorrow);
@@ -359,6 +371,99 @@ function renderWeatherCalendarHTML(weather, events, settings) {
           <div class="events">${renderEvents(tomorrowEvents)}</div>
         </div>
       </div>
+    </body></html>
+  `;
+}
+
+// ===== 3. 月カレンダー =====
+function renderMonthCalendarHTML(events, settings) {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  
+  const eventsByDate = {};
+  events.forEach(e => {
+    if (e.date.startsWith(`${year}-${String(month+1).padStart(2,'0')}`)) {
+      const d = parseInt(e.date.split('-')[2]);
+      if (!eventsByDate[d]) eventsByDate[d] = [];
+      eventsByDate[d].push(e);
+    }
+  });
+  
+  let cells = '';
+  for (let i = 0; i < firstDay; i++) cells += '<div class="cell empty"></div>';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const isToday = d === today.getDate();
+    const dayEvents = eventsByDate[d] || [];
+    
+    const eventsText = dayEvents.slice(0, 2).map(e => {
+      const color = e.person === settings.person1_name ? settings.person1_color :
+                    e.person === settings.person2_name ? settings.person2_color : '#999';
+      const shortTitle = e.title.length > 10 ? e.title.substring(0, 10) + '…' : e.title;
+      return `<div class="event-text" style="color:${color}">${shortTitle}</div>`;
+    }).join('');
+    
+    const moreCount = dayEvents.length > 2 ? `<div class="more">+${dayEvents.length - 2}</div>` : '';
+    
+    cells += `
+      <div class="cell ${isToday ? 'today' : ''}">
+        <div class="day">${d}</div>
+        ${eventsText}
+        ${moreCount}
+      </div>`;
+  }
+  
+  return `
+    <!DOCTYPE html>
+    <html><head><meta charset="UTF-8"><style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { 
+        width: 800px; height: 480px; 
+        font-family: 'Noto Sans JP', sans-serif;
+        padding: 16px 24px; background: white;
+      }
+      .header { display: flex; align-items: baseline; margin-bottom: 6px; }
+      .month { font-size: 48px; font-weight: 900; color: #4A90E2; }
+      .year { font-size: 20px; color: #999; margin-left: 12px; }
+      .legend { margin-left: auto; font-size: 13px; color: #666; }
+      .legend-item { display: inline-flex; align-items: center; margin-left: 12px; }
+      .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+      .weekdays, .grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+      .weekdays { font-size: 13px; color: #999; text-align: center; padding: 4px 0; border-bottom: 1px solid #eee; }
+      .weekdays div:first-child { color: #E24A8B; }
+      .weekdays div:last-child { color: #4A90E2; }
+      .cell { 
+        border-right: 1px solid #f5f5f5; border-bottom: 1px solid #f5f5f5;
+        padding: 4px 6px; height: 62px; position: relative;
+        overflow: hidden;
+      }
+      .cell.empty { background: #fafafa; }
+      .day { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+      .cell.today .day { 
+        background: #E24A8B; color: white; 
+        width: 22px; height: 22px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 12px;
+      }
+      .event-text {
+        font-size: 10px; line-height: 1.3;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        font-weight: 500;
+      }
+      .more { font-size: 9px; color: #bbb; margin-top: 1px; }
+    </style></head><body>
+      <div class="header">
+        <div class="month">${month + 1}</div>
+        <div class="year">${year}年</div>
+        <div class="legend">
+          <span class="legend-item"><span class="legend-dot" style="background:${settings.person1_color}"></span>${settings.person1_name}</span>
+          <span class="legend-item"><span class="legend-dot" style="background:${settings.person2_color}"></span>${settings.person2_name}</span>
+        </div>
+      </div>
+      <div class="weekdays"><div>日</div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div>土</div></div>
+      <div class="grid">${cells}</div>
     </body></html>
   `;
 }
