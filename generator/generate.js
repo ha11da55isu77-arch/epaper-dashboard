@@ -14,6 +14,8 @@ const TEMP_STATION = '飯田';  // 気温観測地点
 // ===== 気象庁から天気取得 =====
 async function fetchWeather() {
   const defaultResult = {
+    target_label: '今日',
+    target_date: new Date(),
     today_weather: '情報取得中',
     today_code: '100',
     tempMin: null,
@@ -36,32 +38,81 @@ async function fetchWeather() {
     const data = await res.json();
     const result = { ...defaultResult };
     
+    // 今の時刻を日本時間で取得
+    const jstNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+    const currentHour = jstNow.getHours();
+    
+    // 17時以降は「明日」の予報を見る
+    const useTomorrow = currentHour >= 17;
+    result.target_label = useTomorrow ? '明日' : '今日';
+    
     const findArea = (areas) => {
       return areas.find(a => a.area.name.includes(AREA_NAME)) || areas[0];
     };
     
-    const weatherArea = findArea(data[0].timeSeries[0].areas);
-    result.today_weather = weatherArea.weathers[0];
-    result.today_code = weatherArea.weatherCodes[0];
+    // 天気文字列（timeDefines[0]=今日, [1]=明日）
+    const weatherSeries = data[0].timeSeries[0];
+    const weatherArea = findArea(weatherSeries.areas);
+    const weatherIdx = useTomorrow && weatherArea.weathers.length > 1 ? 1 : 0;
+    result.today_weather = weatherArea.weathers[weatherIdx];
+    result.today_code = weatherArea.weatherCodes[weatherIdx];
     
+    // target_date を計算（ターゲット日付）
+    const targetDate = new Date(jstNow);
+    if (useTomorrow) targetDate.setDate(targetDate.getDate() + 1);
+    result.target_date = targetDate;
+    
+    // 降水確率: 対象日のpopsだけを抽出
     const popSeries = data[0].timeSeries[1];
     if (popSeries) {
       const popArea = findArea(popSeries.areas);
-      result.pops = popArea.pops.slice(0, 4);
-      result.popTimes = popSeries.timeDefines.slice(0, 4);
+      const targetYmd = `${targetDate.getFullYear()}${String(targetDate.getMonth()+1).padStart(2,'0')}${String(targetDate.getDate()).padStart(2,'0')}`;
+      
+      const pops = [];
+      const popTimes = [];
+      for (let i = 0; i < popSeries.timeDefines.length; i++) {
+        const t = new Date(popSeries.timeDefines[i]);
+        const ymd = `${t.getFullYear()}${String(t.getMonth()+1).padStart(2,'0')}${String(t.getDate()).padStart(2,'0')}`;
+        if (ymd === targetYmd) {
+          pops.push(popArea.pops[i]);
+          popTimes.push(popSeries.timeDefines[i]);
+        }
+      }
+      result.pops = pops;
+      result.popTimes = popTimes;
     }
     
-    const dailyTempMin = data[0].timeSeries.find(t => t.areas[0].tempsMin);
-    if (dailyTempMin) {
-      const area = dailyTempMin.areas.find(a => a.area.name.includes(TEMP_STATION)) || dailyTempMin.areas[0];
-      const v = Number(area.tempsMin[0]);
-      if (!isNaN(v)) result.tempMin = v;
+    // 気温
+    const tempMinSeries = data[0].timeSeries.find(t => t.areas[0].tempsMin);
+    if (tempMinSeries) {
+      const area = tempMinSeries.areas.find(a => a.area.name.includes(TEMP_STATION)) || tempMinSeries.areas[0];
+      const idx = useTomorrow && area.tempsMin.length > 1 ? 1 : 0;
+      const v = Number(area.tempsMin[idx]);
+      if (!isNaN(v) && v !== 0) result.tempMin = v;
     }
-    const dailyTempMax = data[0].timeSeries.find(t => t.areas[0].tempsMax);
-    if (dailyTempMax) {
-      const area = dailyTempMax.areas.find(a => a.area.name.includes(TEMP_STATION)) || dailyTempMax.areas[0];
-      const v = Number(area.tempsMax[0]);
-      if (!isNaN(v)) result.tempMax = v;
+    const tempMaxSeries = data[0].timeSeries.find(t => t.areas[0].tempsMax);
+    if (tempMaxSeries) {
+      const area = tempMaxSeries.areas.find(a => a.area.name.includes(TEMP_STATION)) || tempMaxSeries.areas[0];
+      const idx = useTomorrow && area.tempsMax.length > 1 ? 1 : 0;
+      const v = Number(area.tempsMax[idx]);
+      if (!isNaN(v) && v !== 0) result.tempMax = v;
+    }
+    
+    // 週間予報も見る（明日以降の気温）
+    if (useTomorrow && (!result.tempMin || !result.tempMax)) {
+      const weeklyTemp = data[1]?.timeSeries?.find(t => t.areas[0].tempsMin || t.areas[0].tempsMax);
+      if (weeklyTemp) {
+        const weeklyArea = weeklyTemp.areas[0];
+        // 週間予報は[今日,明日,明後日...]の順。明日=index 1
+        if (weeklyArea.tempsMin && !result.tempMin) {
+          const v = Number(weeklyArea.tempsMin[1]);
+          if (!isNaN(v)) result.tempMin = v;
+        }
+        if (weeklyArea.tempsMax && !result.tempMax) {
+          const v = Number(weeklyArea.tempsMax[1]);
+          if (!isNaN(v)) result.tempMax = v;
+        }
+      }
     }
     
     return result;
@@ -87,17 +138,30 @@ function getWeatherIcon(code) {
 }
 
 function parseWeatherIcons(weatherText) {
+  // 時間帯・条件キーワードで分割
+  const separators = /のち|時々|一時|所により|夜遅く|朝のうち|昼過ぎ|夜|朝|昼|夕方|未明|明け方|\s+/;
+  const parts = weatherText.split(separators);
+  
   const icons = [];
-  const parts = weatherText.split(/のち|時々|一時/);
+  const seen = new Set();
+  
   for (const p of parts) {
     const trimmed = p.trim();
     if (!trimmed) continue;
-    if (trimmed.includes('雪')) icons.push('❄️');
-    else if (trimmed.includes('雨')) icons.push('🌧️');
-    else if (trimmed.includes('くもり') || trimmed.includes('曇')) icons.push('☁️');
-    else if (trimmed.includes('晴')) icons.push('☀️');
-    else icons.push('🌤️');
+    
+    let icon = null;
+    if (trimmed.includes('雪')) icon = '❄️';
+    else if (trimmed.includes('雨')) icon = '🌧️';
+    else if (trimmed.includes('くもり') || trimmed.includes('曇')) icon = '☁️';
+    else if (trimmed.includes('晴')) icon = '☀️';
+    
+    // 重複を除外（既に同じアイコンがあれば追加しない）
+    if (icon && !seen.has(icon)) {
+      icons.push(icon);
+      seen.add(icon);
+    }
   }
+  
   if (icons.length === 0) icons.push('🌤️');
   return icons.slice(0, 3);
 }
@@ -149,9 +213,9 @@ function renderWeatherOnlyHTML(weather) {
 // ===== 2. 天気＋日にち =====
 function renderWeatherCalendarHTML(weather, events, settings) {
   const today = new Date();
-  const ymd = today.toISOString().split('T')[0];
+  const targetYmd = `${targetDate.getFullYear()}-${String(targetDate.getMonth()+1).padStart(2,'0')}-${String(targetDate.getDate()).padStart(2,'0')}`;
   
-  const todayEvents = events.filter(e => e.date === ymd);
+  const todayEvents = events.filter(e => e.date === targetYmd);
   const eventsHtml = todayEvents.length 
     ? todayEvents.map(e => {
         const color = e.person === settings.person1_name ? settings.person1_color :
@@ -174,7 +238,9 @@ function renderWeatherCalendarHTML(weather, events, settings) {
   ).join('');
   
   const weekdayName = ['日','月','火','水','木','金','土'][today.getDay()];
-  const headerText = `今日 ${today.getDate()}日(${weekdayName})`;
+  const targetDate = weather.target_date || today;
+  const targetWeekday = ['日','月','火','水','木','金','土'][targetDate.getDay()];
+  const headerText = `${weather.target_label || '今日'} ${targetDate.getDate()}日(${targetWeekday})`;
 
   return `
     <!DOCTYPE html>
@@ -275,10 +341,10 @@ function renderWeatherCalendarHTML(weather, events, settings) {
         </div>
       </div>
       <div class="right">
-        <div class="date-big">${today.getDate()}</div>
-        <div class="date-sub">${today.getFullYear()}年 ${today.getMonth() + 1}月</div>
-        <div class="weekday">${weekdayName}曜日</div>
-        <div class="events-title">今日の予定</div>
+        <div class="date-big">${targetDate.getDate()}</div>
+        <div class="date-sub">${targetDate.getFullYear()}年 ${targetDate.getMonth() + 1}月</div>
+        <div class="weekday">${targetWeekday}曜日</div>
+        <div class="events-title">${weather.target_label || '今日'}の予定</div>
         <div class="events">${eventsHtml}</div>
       </div>
     </body></html>
