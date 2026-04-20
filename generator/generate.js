@@ -82,6 +82,7 @@ async function fetchWeather() {
     }
     
     // 気温: "temps":["13","23"] 形式から [最低, 最高] を取得
+    // 気温: "temps":["13","23"] 形式から [最低, 最高] を取得
     const tempSeries = data[0].timeSeries.find(t => t.areas[0].temps);
     if (tempSeries) {
       const tempArea = tempSeries.areas.find(a => a.area.name.includes(TEMP_STATION)) || tempSeries.areas[0];
@@ -193,21 +194,32 @@ function renderWeatherOnlyHTML(weather) {
 
 // ===== 2. 天気＋日にち =====
 function renderWeatherCalendarHTML(weather, events, settings) {
-  const today = new Date();
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
   
+  // 天気の対象日（17時以降は明日）
   const targetDate = weather.target_date ? new Date(weather.target_date) : today;
-  const targetYmd = `${targetDate.getFullYear()}-${String(targetDate.getMonth()+1).padStart(2,'0')}-${String(targetDate.getDate()).padStart(2,'0')}`;
   const targetWeekday = ['日','月','火','水','木','金','土'][targetDate.getDay()];
   const headerText = `${weather.target_label || '今日'} ${targetDate.getDate()}日(${targetWeekday})`;
   
-  const todayEvents = events.filter(e => e.date === targetYmd);
-  const eventsHtml = todayEvents.length 
-    ? todayEvents.map(e => {
-        const color = e.person === settings.person1_name ? settings.person1_color :
-                      e.person === settings.person2_name ? settings.person2_color : '#999';
-        return `<div class="event"><span class="dot" style="background:${color}"></span>${e.title}<span class="person">${e.person}</span></div>`;
-      }).join('')
-    : '<div class="no-event">予定はありません</div>';
+  // 予定を日付文字列でフィルタ
+  const formatYmd = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const todayYmd = formatYmd(today);
+  const tomorrowYmd = formatYmd(tomorrow);
+  
+  const todayEvents = events.filter(e => e.date === todayYmd);
+  const tomorrowEvents = events.filter(e => e.date === tomorrowYmd);
+  
+  const renderEvents = (evs) => {
+    if (!evs.length) return '<div class="no-event">予定なし</div>';
+    return evs.slice(0, 3).map(e => {
+      const color = e.person === settings.person1_name ? settings.person1_color :
+                    e.person === settings.person2_name ? settings.person2_color : '#999';
+      const shortTitle = e.title.length > 12 ? e.title.substring(0, 12) + '…' : e.title;
+      return `<div class="event"><span class="dot" style="background:${color}"></span>${shortTitle}</div>`;
+    }).join('');
+  };
   
   const icons = parseWeatherIcons(weather.today_weather);
   const iconsHtml = icons.map((icon, i) => {
@@ -221,6 +233,9 @@ function renderWeatherCalendarHTML(weather, events, settings) {
   const popCells = popLabels.map((label, i) => 
     `<div class="pop-cell"><div class="pop-label">${label}</div><div class="pop-val">${pops[i] ?? '-'}%</div></div>`
   ).join('');
+  
+  const todayWeekday = ['日','月','火','水','木','金','土'][today.getDay()];
+  const tomorrowWeekday = ['日','月','火','水','木','金','土'][tomorrow.getDay()];
 
   return `
     <!DOCTYPE html>
@@ -276,33 +291,37 @@ function renderWeatherCalendarHTML(weather, events, settings) {
       .temp-cell.max .temp-val { color: #E24A4A; }
       
       .right { 
-        width: 380px; padding: 30px; 
+        width: 380px; padding: 16px 24px; 
         display: flex; flex-direction: column; 
       }
-      .date-big { 
-        font-size: 120px; font-weight: 900; line-height: 1;
-        color: #E24A8B;
+      .day-block { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+      .day-block.today { border-bottom: 2px dashed #eee; padding-bottom: 10px; margin-bottom: 10px; }
+      .day-head { display: flex; align-items: baseline; gap: 10px; }
+      .day-label { 
+        font-size: 13px; color: white; background: #999;
+        padding: 2px 10px; border-radius: 10px; font-weight: 600;
       }
-      .date-sub { font-size: 22px; color: #666; margin-top: 8px; }
-      .weekday { font-size: 28px; color: #4A90E2; margin-top: 8px; font-weight: 600; }
-      .events-title { 
-        font-size: 18px; color: #999; margin-top: 26px; 
-        border-bottom: 2px solid #eee; padding-bottom: 6px;
+      .day-block.today .day-label { background: #E24A8B; }
+      .day-block.tomorrow .day-label { background: #4A90E2; }
+      .date-num { 
+        font-size: 56px; font-weight: 900; line-height: 1;
       }
-      .events { margin-top: 10px; }
+      .day-block.today .date-num { color: #E24A8B; }
+      .day-block.tomorrow .date-num { color: #4A90E2; }
+      .date-month { font-size: 16px; color: #666; }
+      .weekday-label { font-size: 16px; color: #666; margin-left: auto; }
+      .events {
+        margin-top: 6px; flex: 1; overflow: hidden;
+      }
       .event { 
-        font-size: 18px; padding: 8px 0;
+        font-size: 15px; padding: 4px 0;
         display: flex; align-items: center;
-        border-bottom: 1px solid #f5f5f5;
       }
       .dot { 
-        display: inline-block; width: 12px; height: 12px; 
-        border-radius: 50%; margin-right: 12px;
+        display: inline-block; width: 10px; height: 10px; 
+        border-radius: 50%; margin-right: 8px; flex-shrink: 0;
       }
-      .person { 
-        font-size: 13px; color: #999; margin-left: auto;
-      }
-      .no-event { color: #ccc; font-size: 16px; padding: 16px 0; }
+      .no-event { color: #ccc; font-size: 13px; padding: 4px 0; }
     </style></head><body>
       <div class="left">
         <div class="header-bar">${headerText}</div>
@@ -321,105 +340,25 @@ function renderWeatherCalendarHTML(weather, events, settings) {
         </div>
       </div>
       <div class="right">
-        <div class="date-big">${targetDate.getDate()}</div>
-        <div class="date-sub">${targetDate.getFullYear()}年 ${targetDate.getMonth() + 1}月</div>
-        <div class="weekday">${targetWeekday}曜日</div>
-        <div class="events-title">${weather.target_label || '今日'}の予定</div>
-        <div class="events">${eventsHtml}</div>
-      </div>
-    </body></html>
-  `;
-}
-
-// ===== 3. 月カレンダー =====
-function renderMonthCalendarHTML(events, settings) {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth();
-  const firstDay = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  
-  const eventsByDate = {};
-  events.forEach(e => {
-    if (e.date.startsWith(`${year}-${String(month+1).padStart(2,'0')}`)) {
-      const d = parseInt(e.date.split('-')[2]);
-      if (!eventsByDate[d]) eventsByDate[d] = [];
-      eventsByDate[d].push(e);
-    }
-  });
-  
-  let cells = '';
-  for (let i = 0; i < firstDay; i++) cells += '<div class="cell empty"></div>';
-  for (let d = 1; d <= daysInMonth; d++) {
-    const isToday = d === today.getDate();
-    const dayEvents = eventsByDate[d] || [];
-    
-    const eventsText = dayEvents.slice(0, 2).map(e => {
-      const color = e.person === settings.person1_name ? settings.person1_color :
-                    e.person === settings.person2_name ? settings.person2_color : '#999';
-      const shortTitle = e.title.length > 10 ? e.title.substring(0, 10) + '…' : e.title;
-      return `<div class="event-text" style="color:${color}">${shortTitle}</div>`;
-    }).join('');
-    
-    const moreCount = dayEvents.length > 2 ? `<div class="more">+${dayEvents.length - 2}</div>` : '';
-    
-    cells += `
-      <div class="cell ${isToday ? 'today' : ''}">
-        <div class="day">${d}</div>
-        ${eventsText}
-        ${moreCount}
-      </div>`;
-  }
-  
-  return `
-    <!DOCTYPE html>
-    <html><head><meta charset="UTF-8"><style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { 
-        width: 800px; height: 480px; 
-        font-family: 'Noto Sans JP', sans-serif;
-        padding: 16px 24px; background: white;
-      }
-      .header { display: flex; align-items: baseline; margin-bottom: 6px; }
-      .month { font-size: 48px; font-weight: 900; color: #4A90E2; }
-      .year { font-size: 20px; color: #999; margin-left: 12px; }
-      .legend { margin-left: auto; font-size: 13px; color: #666; }
-      .legend-item { display: inline-flex; align-items: center; margin-left: 12px; }
-      .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
-      .weekdays, .grid { display: grid; grid-template-columns: repeat(7, 1fr); }
-      .weekdays { font-size: 13px; color: #999; text-align: center; padding: 4px 0; border-bottom: 1px solid #eee; }
-      .weekdays div:first-child { color: #E24A8B; }
-      .weekdays div:last-child { color: #4A90E2; }
-      .cell { 
-        border-right: 1px solid #f5f5f5; border-bottom: 1px solid #f5f5f5;
-        padding: 4px 6px; height: 62px; position: relative;
-        overflow: hidden;
-      }
-      .cell.empty { background: #fafafa; }
-      .day { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
-      .cell.today .day { 
-        background: #E24A8B; color: white; 
-        width: 22px; height: 22px; border-radius: 50%;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 12px;
-      }
-      .event-text {
-        font-size: 10px; line-height: 1.3;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        font-weight: 500;
-      }
-      .more { font-size: 9px; color: #bbb; margin-top: 1px; }
-    </style></head><body>
-      <div class="header">
-        <div class="month">${month + 1}</div>
-        <div class="year">${year}年</div>
-        <div class="legend">
-          <span class="legend-item"><span class="legend-dot" style="background:${settings.person1_color}"></span>${settings.person1_name}</span>
-          <span class="legend-item"><span class="legend-dot" style="background:${settings.person2_color}"></span>${settings.person2_name}</span>
+        <div class="day-block today">
+          <div class="day-head">
+            <span class="day-label">今日</span>
+            <span class="date-num">${today.getDate()}</span>
+            <span class="date-month">${today.getMonth()+1}月</span>
+            <span class="weekday-label">${todayWeekday}曜日</span>
+          </div>
+          <div class="events">${renderEvents(todayEvents)}</div>
+        </div>
+        <div class="day-block tomorrow">
+          <div class="day-head">
+            <span class="day-label">明日</span>
+            <span class="date-num">${tomorrow.getDate()}</span>
+            <span class="date-month">${tomorrow.getMonth()+1}月</span>
+            <span class="weekday-label">${tomorrowWeekday}曜日</span>
+          </div>
+          <div class="events">${renderEvents(tomorrowEvents)}</div>
         </div>
       </div>
-      <div class="weekdays"><div>日</div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div>土</div></div>
-      <div class="grid">${cells}</div>
     </body></html>
   `;
 }
