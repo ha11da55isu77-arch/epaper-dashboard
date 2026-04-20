@@ -6,64 +6,69 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const WEATHER_AREA = '200000';  // 長野県
-const AREA_NAME = '南部';  // エリア名で絞り込み（「北部」「中部」「南部」など）
+// 地域コード: 140000=神奈川, 130000=東京, 200000=長野 など
+const WEATHER_AREA = '200000';
+const AREA_NAME = '南部';  // 長野県の場合: 北部/中部/南部
+const TEMP_STATION = '飯田';  // 気温観測地点
 
-// ===== 気象庁から天気・気温・降水確率を取得 =====
+// ===== 気象庁から天気取得 =====
 async function fetchWeather() {
-  const url = `https://www.jma.go.jp/bosai/forecast/data/forecast/${WEATHER_AREA}.json`;
-  const res = await fetch(url);
-  const data = await res.json();
-  
-  const result = {
-    today_weather: '',
+  const defaultResult = {
+    today_weather: '情報取得中',
     today_code: '100',
     tempMin: null,
     tempMax: null,
-    pops: [],       // 降水確率 6時間ごと
-    popTimes: [],   // 降水確率の時間ラベル
+    pops: [],
+    popTimes: [],
     updated: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })
   };
   
   try {
-    // 今日の天気
-    // エリア名で絞り込むヘルパー
-const findArea = (areas) => {
-  return areas.find(a => a.area.name.includes(AREA_NAME)) || areas[0];
-};
-
-const weatherArea = findArea(data[0].timeSeries[0].areas);
-result.today_weather = weatherArea.weathers[0];
-result.today_code = weatherArea.weatherCodes[0];
-
-const popSeries = data[0].timeSeries[1];
-if (popSeries) {
-  const popArea = findArea(popSeries.areas);
-  result.pops = popArea.pops.slice(0, 4);
-  result.popTimes = popSeries.timeDefines.slice(0, 4);
-}
+    const url = `https://www.jma.go.jp/bosai/forecast/data/forecast/${WEATHER_AREA}.json`;
+    const res = await fetch(url);
     
-  // 気温は観測地点コード(「長野」「松本」「飯田」など)で取得
-// 南信なら「飯田」が一番近い
-const tempStationName = '飯田';
-
-const dailyTempMin = data[0].timeSeries.find(t => t.areas[0].tempsMin);
-if (dailyTempMin) {
-  const area = dailyTempMin.areas.find(a => a.area.name.includes(tempStationName)) || dailyTempMin.areas[0];
-  const v = Number(area.tempsMin[0]);
-  if (!isNaN(v)) result.tempMin = v;
-}
-const dailyTempMax = data[0].timeSeries.find(t => t.areas[0].tempsMax);
-if (dailyTempMax) {
-  const area = dailyTempMax.areas.find(a => a.area.name.includes(tempStationName)) || dailyTempMax.areas[0];
-  const v = Number(area.tempsMax[0]);
-  if (!isNaN(v)) result.tempMax = v;
-}
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('json')) {
+      console.warn('Weather API returned non-JSON, using defaults');
+      return defaultResult;
+    }
+    
+    const data = await res.json();
+    const result = { ...defaultResult };
+    
+    const findArea = (areas) => {
+      return areas.find(a => a.area.name.includes(AREA_NAME)) || areas[0];
+    };
+    
+    const weatherArea = findArea(data[0].timeSeries[0].areas);
+    result.today_weather = weatherArea.weathers[0];
+    result.today_code = weatherArea.weatherCodes[0];
+    
+    const popSeries = data[0].timeSeries[1];
+    if (popSeries) {
+      const popArea = findArea(popSeries.areas);
+      result.pops = popArea.pops.slice(0, 4);
+      result.popTimes = popSeries.timeDefines.slice(0, 4);
+    }
+    
+    const dailyTempMin = data[0].timeSeries.find(t => t.areas[0].tempsMin);
+    if (dailyTempMin) {
+      const area = dailyTempMin.areas.find(a => a.area.name.includes(TEMP_STATION)) || dailyTempMin.areas[0];
+      const v = Number(area.tempsMin[0]);
+      if (!isNaN(v)) result.tempMin = v;
+    }
+    const dailyTempMax = data[0].timeSeries.find(t => t.areas[0].tempsMax);
+    if (dailyTempMax) {
+      const area = dailyTempMax.areas.find(a => a.area.name.includes(TEMP_STATION)) || dailyTempMax.areas[0];
+      const v = Number(area.tempsMax[0]);
+      if (!isNaN(v)) result.tempMax = v;
+    }
+    
+    return result;
   } catch (e) {
-    console.error('Weather parse error:', e);
+    console.error('Weather fetch failed:', e.message);
+    return defaultResult;
   }
-  
-  return result;
 }
 
 async function fetchGasData() {
@@ -80,10 +85,9 @@ function getWeatherIcon(code) {
   if (c.startsWith('4')) return '❄️';
   return '🌤️';
 }
-// 天気の文字列から、時間変化を解析して複数のアイコンを返す
+
 function parseWeatherIcons(weatherText) {
   const icons = [];
-  // "晴れのちくもり", "晴れ時々雨", "くもり一時雨" などを分割
   const parts = weatherText.split(/のち|時々|一時/);
   for (const p of parts) {
     const trimmed = p.trim();
@@ -95,9 +99,9 @@ function parseWeatherIcons(weatherText) {
     else icons.push('🌤️');
   }
   if (icons.length === 0) icons.push('🌤️');
-  return icons.slice(0, 3); // 最大3つ
+  return icons.slice(0, 3);
 }
-// 時刻ラベルを "6時" のような形式に
+
 function formatHour(isoString) {
   const d = new Date(isoString);
   const h = d.getHours();
@@ -108,20 +112,15 @@ function formatHour(isoString) {
 function renderWeatherOnlyHTML(weather) {
   const today = new Date();
   const dateStr = `${today.getFullYear()}年 ${today.getMonth()+1}月 ${today.getDate()}日 (${['日','月','火','水','木','金','土'][today.getDay()]})`;
-  const icon = getWeatherIcon(weather.today_code);
+  const icons = parseWeatherIcons(weather.today_weather);
+  const iconsHtml = icons.map((icon, i) => {
+    const arrow = i < icons.length - 1 ? '<span style="font-size:60px;color:#F5A623;margin:0 10px;">→</span>' : '';
+    return `<span>${icon}</span>${arrow}`;
+  }).join('');
   
   const tempStr = (weather.tempMax !== null || weather.tempMin !== null) 
     ? `最低 ${weather.tempMin ?? '-'}° &nbsp;/&nbsp; 最高 ${weather.tempMax ?? '-'}°`
     : '';
-  
-  // 降水確率の棒グラフ
-  const popBars = weather.pops.map((p, i) => `
-    <div class="pop-item">
-      <div class="pop-time">${formatHour(weather.popTimes[i])}</div>
-      <div class="pop-bar-wrap"><div class="pop-bar" style="height:${p || 0}%"></div></div>
-      <div class="pop-value">${p ?? '-'}%</div>
-    </div>
-  `).join('');
 
   return `
     <!DOCTYPE html>
@@ -132,43 +131,17 @@ function renderWeatherOnlyHTML(weather) {
         font-family: 'Noto Sans JP', sans-serif;
         background: white; color: #222;
         display: flex; flex-direction: column;
-        align-items: center; padding: 20px;
+        align-items: center; padding: 30px;
       }
-      .date { font-size: 24px; color: #666; }
-      .main { display: flex; align-items: center; margin-top: 10px; gap: 30px; }
-      .icon { font-size: 180px; line-height: 1; }
-      .info { display: flex; flex-direction: column; }
-      .weather { font-size: 44px; font-weight: 700; }
-      .temps { font-size: 28px; color: #666; margin-top: 10px; }
-      .pop-section { 
-        display: flex; gap: 24px; margin-top: 24px;
-        padding: 16px 32px; border-top: 1px solid #eee; width: 100%;
-        justify-content: center; align-items: flex-end;
-      }
-      .pop-item { text-align: center; }
-      .pop-time { font-size: 14px; color: #999; }
-      .pop-bar-wrap {
-        width: 40px; height: 50px; background: #f0f0f0;
-        border-radius: 6px; position: relative; margin: 4px auto;
-        display: flex; align-items: flex-end;
-      }
-      .pop-bar { 
-        width: 100%; background: #4A90E2; 
-        border-radius: 6px; min-height: 2px;
-      }
-      .pop-value { font-size: 14px; font-weight: 600; color: #4A90E2; }
+      .date { font-size: 28px; color: #666; }
+      .icons { font-size: 160px; line-height: 1; margin: 20px 0; display: flex; align-items: center; }
+      .weather { font-size: 40px; font-weight: 700; }
+      .temps { font-size: 28px; color: #666; margin-top: 16px; }
     </style></head><body>
       <div class="date">${dateStr}</div>
-      <div class="main">
-        <div class="icon">${icon}</div>
-        <div class="info">
-          <div class="weather">${weather.today_weather}</div>
-          <div class="temps">${tempStr}</div>
-        </div>
-      </div>
-      <div class="pop-section">
-        ${popBars || '<div style="color:#ccc">降水確率情報なし</div>'}
-      </div>
+      <div class="icons">${iconsHtml}</div>
+      <div class="weather">${weather.today_weather}</div>
+      <div class="temps">${tempStr}</div>
     </body></html>
   `;
 }
@@ -187,28 +160,12 @@ function renderWeatherCalendarHTML(weather, events, settings) {
       }).join('')
     : '<div class="no-event">今日の予定はありません</div>';
   
-function renderWeatherCalendarHTML(weather, events, settings) {
-  const today = new Date();
-  const ymd = today.toISOString().split('T')[0];
-  
-  const todayEvents = events.filter(e => e.date === ymd);
-  const eventsHtml = todayEvents.length 
-    ? todayEvents.map(e => {
-        const color = e.person === settings.person1_name ? settings.person1_color :
-                      e.person === settings.person2_name ? settings.person2_color : '#999';
-        return `<div class="event"><span class="dot" style="background:${color}"></span>${e.title}<span class="person">${e.person}</span></div>`;
-      }).join('')
-    : '<div class="no-event">今日の予定はありません</div>';
-  
-  // 天気アイコン（複数対応）
   const icons = parseWeatherIcons(weather.today_weather);
   const iconsHtml = icons.map((icon, i) => {
     const arrow = i < icons.length - 1 ? '<span class="arrow">→</span>' : '';
     return `<span class="icon">${icon}</span>${arrow}`;
   }).join('');
   
-  // 時間帯別降水確率テーブル
-  // 気象庁APIは6時間刻み: 00-06, 06-12, 12-18, 18-24
   const popLabels = ['0-6', '6-12', '12-18', '18-24'];
   const pops = weather.pops.length >= 4 ? weather.pops.slice(0, 4) : [null, null, null, null];
   
@@ -216,7 +173,6 @@ function renderWeatherCalendarHTML(weather, events, settings) {
     `<div class="pop-cell"><div class="pop-label">${label}</div><div class="pop-val">${pops[i] ?? '-'}%</div></div>`
   ).join('');
   
-  // 曜日
   const weekdayName = ['日','月','火','水','木','金','土'][today.getDay()];
   const headerText = `今日 ${today.getDate()}日(${weekdayName})`;
 
@@ -457,7 +413,7 @@ async function main() {
   console.log('Weather:', JSON.stringify(weather));
   
   const { settings, events } = gasData;
-  console.log(`Image URL exists: ${gasData.imageUrl ? 'YES (' + gasData.imageUrl.length + ' chars)' : 'NO'}`);
+  console.log(`Image URL exists: ${gasData.imageUrl ? 'YES' : 'NO'}`);
   
   let mode = settings.mode || 'auto';
   
