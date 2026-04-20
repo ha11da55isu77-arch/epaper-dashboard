@@ -6,8 +6,8 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// 地域コード: 140000=神奈川, 130000=東京, 270000=大阪 など
-const WEATHER_AREA = '140000';
+const WEATHER_AREA = '200000';  // 長野県
+const AREA_NAME = '南部';  // エリア名で絞り込み（「北部」「中部」「南部」など）
 
 // ===== 気象庁から天気・気温・降水確率を取得 =====
 async function fetchWeather() {
@@ -27,37 +27,38 @@ async function fetchWeather() {
   
   try {
     // 今日の天気
-    result.today_weather = data[0].timeSeries[0].areas[0].weathers[0];
-    result.today_code = data[0].timeSeries[0].areas[0].weatherCodes[0];
+    // エリア名で絞り込むヘルパー
+const findArea = (areas) => {
+  return areas.find(a => a.area.name.includes(AREA_NAME)) || areas[0];
+};
+
+const weatherArea = findArea(data[0].timeSeries[0].areas);
+result.today_weather = weatherArea.weathers[0];
+result.today_code = weatherArea.weatherCodes[0];
+
+const popSeries = data[0].timeSeries[1];
+if (popSeries) {
+  const popArea = findArea(popSeries.areas);
+  result.pops = popArea.pops.slice(0, 4);
+  result.popTimes = popSeries.timeDefines.slice(0, 4);
+}
     
-    // 降水確率（6時間ごと）
-    const popSeries = data[0].timeSeries[1];
-    if (popSeries) {
-      result.pops = popSeries.areas[0].pops.slice(0, 4);
-      result.popTimes = popSeries.timeDefines.slice(0, 4);
-    }
-    
-    // 気温（最低・最高）- data[1]は週間予報
-    const weeklyTemp = data[1]?.timeSeries?.find(t => t.areas[0].tempsMin || t.areas[0].temps);
-    if (weeklyTemp) {
-      const temps = weeklyTemp.areas[0].temps;
-      if (temps && temps.length >= 2) {
-        result.tempMin = Number(temps[0]);
-        result.tempMax = Number(temps[1]);
-      }
-    }
-    
-    // data[0]のtemp系列も試す
-    const dailyTempMin = data[0].timeSeries.find(t => t.areas[0].tempsMin);
-    if (dailyTempMin) {
-      const v = Number(dailyTempMin.areas[0].tempsMin[0]);
-      if (!isNaN(v)) result.tempMin = v;
-    }
-    const dailyTempMax = data[0].timeSeries.find(t => t.areas[0].tempsMax);
-    if (dailyTempMax) {
-      const v = Number(dailyTempMax.areas[0].tempsMax[0]);
-      if (!isNaN(v)) result.tempMax = v;
-    }
+  // 気温は観測地点コード(「長野」「松本」「飯田」など)で取得
+// 南信なら「飯田」が一番近い
+const tempStationName = '飯田';
+
+const dailyTempMin = data[0].timeSeries.find(t => t.areas[0].tempsMin);
+if (dailyTempMin) {
+  const area = dailyTempMin.areas.find(a => a.area.name.includes(tempStationName)) || dailyTempMin.areas[0];
+  const v = Number(area.tempsMin[0]);
+  if (!isNaN(v)) result.tempMin = v;
+}
+const dailyTempMax = data[0].timeSeries.find(t => t.areas[0].tempsMax);
+if (dailyTempMax) {
+  const area = dailyTempMax.areas.find(a => a.area.name.includes(tempStationName)) || dailyTempMax.areas[0];
+  const v = Number(area.tempsMax[0]);
+  if (!isNaN(v)) result.tempMax = v;
+}
   } catch (e) {
     console.error('Weather parse error:', e);
   }
