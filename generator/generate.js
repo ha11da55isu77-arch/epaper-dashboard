@@ -213,8 +213,14 @@ function renderWeatherOnlyHTML(weather) {
 // ===== 2. 天気＋日にち =====
 function renderWeatherCalendarHTML(weather, events, settings) {
   const today = new Date();
-  const targetYmd = `${targetDate.getFullYear()}-${String(targetDate.getMonth()+1).padStart(2,'0')}-${String(targetDate.getDate()).padStart(2,'0')}`;
   
+  // 対象日（今日 or 明日）
+  const targetDate = weather.target_date ? new Date(weather.target_date) : today;
+  const targetYmd = `${targetDate.getFullYear()}-${String(targetDate.getMonth()+1).padStart(2,'0')}-${String(targetDate.getDate()).padStart(2,'0')}`;
+  const targetWeekday = ['日','月','火','水','木','金','土'][targetDate.getDay()];
+  const headerText = `${weather.target_label || '今日'} ${targetDate.getDate()}日(${targetWeekday})`;
+  
+  // 対象日の予定をフィルタ
   const todayEvents = events.filter(e => e.date === targetYmd);
   const eventsHtml = todayEvents.length 
     ? todayEvents.map(e => {
@@ -222,7 +228,7 @@ function renderWeatherCalendarHTML(weather, events, settings) {
                       e.person === settings.person2_name ? settings.person2_color : '#999';
         return `<div class="event"><span class="dot" style="background:${color}"></span>${e.title}<span class="person">${e.person}</span></div>`;
       }).join('')
-    : '<div class="no-event">今日の予定はありません</div>';
+    : '<div class="no-event">予定はありません</div>';
   
   const icons = parseWeatherIcons(weather.today_weather);
   const iconsHtml = icons.map((icon, i) => {
@@ -236,11 +242,8 @@ function renderWeatherCalendarHTML(weather, events, settings) {
   const popCells = popLabels.map((label, i) => 
     `<div class="pop-cell"><div class="pop-label">${label}</div><div class="pop-val">${pops[i] ?? '-'}%</div></div>`
   ).join('');
-  
-  const weekdayName = ['日','月','火','水','木','金','土'][today.getDay()];
-  const targetDate = weather.target_date || today;
-  const targetWeekday = ['日','月','火','水','木','金','土'][targetDate.getDay()];
-  const headerText = `${weather.target_label || '今日'} ${targetDate.getDate()}日(${targetWeekday})`;
+
+  return `
 
   return `
     <!DOCTYPE html>
