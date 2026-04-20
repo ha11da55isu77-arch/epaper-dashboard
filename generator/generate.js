@@ -60,17 +60,17 @@ async function fetchWeather() {
     result.today_weather = weatherArea.weathers[weatherIdx];
     result.today_code = weatherArea.weatherCodes[weatherIdx];
     
-    // 降水確率: 対象日のpopsだけを抽出
+    // 降水確率: 対象日のpopsだけを抽出（JST基準で日付比較）
     const popSeries = data[0].timeSeries[1];
     if (popSeries) {
       const popArea = findArea(popSeries.areas);
-      const targetYmd = `${targetDate.getFullYear()}${String(targetDate.getMonth()+1).padStart(2,'0')}${String(targetDate.getDate()).padStart(2,'0')}`;
+      const targetYmd = `${targetDate.getFullYear()}-${String(targetDate.getMonth()+1).padStart(2,'0')}-${String(targetDate.getDate()).padStart(2,'0')}`;
       
       const pops = [];
       const popTimes = [];
       for (let i = 0; i < popSeries.timeDefines.length; i++) {
-        const t = new Date(popSeries.timeDefines[i]);
-        const ymd = `${t.getFullYear()}${String(t.getMonth()+1).padStart(2,'0')}${String(t.getDate()).padStart(2,'0')}`;
+        // "2026-04-21T06:00:00+09:00" → 文字列の最初10文字が日付
+        const ymd = popSeries.timeDefines[i].substring(0, 10);
         if (ymd === targetYmd) {
           pops.push(popArea.pops[i]);
           popTimes.push(popSeries.timeDefines[i]);
@@ -78,37 +78,36 @@ async function fetchWeather() {
       }
       result.pops = pops;
       result.popTimes = popTimes;
+      console.log(`Target YMD: ${targetYmd}, Found ${pops.length} pops:`, pops);
     }
     
-    // 気温（今日）
-    const tempMinSeries = data[0].timeSeries.find(t => t.areas[0].tempsMin);
-    if (tempMinSeries) {
-      const area = tempMinSeries.areas.find(a => a.area.name.includes(TEMP_STATION)) || tempMinSeries.areas[0];
-      const idx = useTomorrow && area.tempsMin.length > 1 ? 1 : 0;
-      const v = Number(area.tempsMin[idx]);
-      if (!isNaN(v) && v !== 0) result.tempMin = v;
-    }
-    const tempMaxSeries = data[0].timeSeries.find(t => t.areas[0].tempsMax);
-    if (tempMaxSeries) {
-      const area = tempMaxSeries.areas.find(a => a.area.name.includes(TEMP_STATION)) || tempMaxSeries.areas[0];
-      const idx = useTomorrow && area.tempsMax.length > 1 ? 1 : 0;
-      const v = Number(area.tempsMax[idx]);
-      if (!isNaN(v) && v !== 0) result.tempMax = v;
+    // 気温: "temps":["13","23"] 形式から [最低, 最高] を取得
+    const tempSeries = data[0].timeSeries.find(t => t.areas[0].temps);
+    if (tempSeries) {
+      const tempArea = tempSeries.areas.find(a => a.area.name.includes(TEMP_STATION)) || tempSeries.areas[0];
+      if (tempArea.temps && tempArea.temps.length >= 2) {
+        const vMin = Number(tempArea.temps[0]);
+        const vMax = Number(tempArea.temps[1]);
+        if (!isNaN(vMin)) result.tempMin = vMin;
+        if (!isNaN(vMax)) result.tempMax = vMax;
+        console.log(`Temp station: ${tempArea.area.name}, temps:`, tempArea.temps);
+      }
     }
     
-    // 週間予報から明日の気温を補う
-    if (useTomorrow && (result.tempMin === null || result.tempMax === null)) {
+    // 明日の気温は週間予報から取得
+    if (useTomorrow) {
       const weekly = data[1]?.timeSeries?.find(t => t.areas[0].tempsMin || t.areas[0].tempsMax);
       if (weekly) {
         const wa = weekly.areas[0];
-        if (wa.tempsMin && result.tempMin === null) {
+        if (wa.tempsMin && wa.tempsMin.length > 1) {
           const v = Number(wa.tempsMin[1]);
           if (!isNaN(v)) result.tempMin = v;
         }
-        if (wa.tempsMax && result.tempMax === null) {
+        if (wa.tempsMax && wa.tempsMax.length > 1) {
           const v = Number(wa.tempsMax[1]);
           if (!isNaN(v)) result.tempMax = v;
         }
+        console.log(`Weekly temp - Min: ${result.tempMin}, Max: ${result.tempMax}`);
       }
     }
     
